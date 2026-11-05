@@ -32,6 +32,7 @@ import com.google.common.collect.Sets;
 import com.nutomic.syncthingandroid.R;
 import com.nutomic.syncthingandroid.SyncthingApp;
 import com.nutomic.syncthingandroid.util.FileUtils;
+import com.nutomic.syncthingandroid.util.RootCompat;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.io.File;
@@ -39,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * Activity that allows selecting a directory in the local file system.
@@ -149,14 +151,33 @@ public class FolderPickerActivity extends SyncthingActivity
                 Collections.addAll(roots, mountedStoragePaths);
             }
             roots.add(new File("/"));
+
+            // Additional roots which are usually only reachable with root or Shizuku.
+            if (RootCompat.isEnabled(this)) {
+                roots.add(new File("/data/media/0"));
+                roots.add(new File("/storage/emulated/0/Android"));
+                roots.add(new File("/storage/emulated/0/Android/data"));
+                roots.add(new File("/storage/emulated/0/Android/obb"));
+                roots.add(new File("/data/local/tmp"));
+            }
         }
         // Remove any invalid directories.
         Iterator<File> it = roots.iterator();
         while (it.hasNext()) {
             File f = it.next();
-            if (f == null || !f.exists() || !f.isDirectory()) {
+            if (f == null) {
                 it.remove();
+                continue;
             }
+            // Root/Shizuku mode may browse folders we cannot stat ourselves.
+            if (f.exists() && f.isDirectory()) {
+                continue;
+            }
+            if (!f.exists() && RootCompat.isEnabled(this) && RootCompat.isActive(this)
+                    && RootCompat.isDirectory(this, f)) {
+                continue;
+            }
+            it.remove();
         }
 
         mRootsAdapter.addAll(Sets.newTreeSet(roots));
@@ -188,6 +209,9 @@ public class FolderPickerActivity extends SyncthingActivity
             dialog.setOnShowListener(dialogInterface -> ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE))
                     .showSoftInput(et, InputMethodManager.SHOW_IMPLICIT));
             dialog.show();
+            return true;
+        } else if (itemId == R.id.go_to_path) {
+            showGoToPathDialog();
             return true;
         } else if (itemId == R.id.folder_go_up) {
             if (canGoUpToSubDir() || canGoUpToRootDir()) {
@@ -232,11 +256,54 @@ public class FolderPickerActivity extends SyncthingActivity
      */
     private void createFolder(String name) {
         File newFolder = new File(mLocation, name);
-        if (newFolder.mkdir()) {
+        boolean created = newFolder.mkdir();
+        if (!created && RootCompat.isEnabled(this) && RootCompat.isActive(this)) {
+            created = RootCompat.execShell(this,
+                    "mkdir -p " + RootCompat.shellQuote(newFolder.getAbsolutePath())) == 0;
+        }
+        if (created) {
             displayFolder(newFolder);
         } else {
             Toast.makeText(this, R.string.create_folder_failed, Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /**
+     * Lets the user type an absolute path, e.g. a folder inside {@code /data/media/0} that is not
+     * reachable by browsing. Useful together with root/Shizuku mode.
+     */
+    private void showGoToPathDialog() {
+        final EditText et = new EditText(this);
+        if (mLocation != null) {
+            et.setText(mLocation.getAbsolutePath());
+            et.setSelection(et.getText().length());
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.folder_picker_go_to_path)
+                .setView(et)
+                .setPositiveButton(android.R.string.ok, (dialogInterface, i) -> {
+                    String path = Util.formatPath(et.getText().toString());
+                    if (TextUtils.isEmpty(path)) {
+                        return;
+                    }
+                    File target = new File(path);
+                    if (RootCompat.isEnabled(this) && RootCompat.isActive(this)
+                            && RootCompat.isDirectory(this, target)) {
+                        displayFolder(target);
+                        invalidateOptions();
+                    } else if (target.isDirectory()) {
+                        displayFolder(target);
+                        invalidateOptions();
+                    } else {
+                        Toast.makeText(this, R.string.folder_picker_invalid_path,
+                                Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(dialogInterface -> ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE))
+                .showSoftInput(et, InputMethodManager.SHOW_IMPLICIT));
+        dialog.show();
     }
 
     /**
@@ -247,18 +314,55 @@ public class FolderPickerActivity extends SyncthingActivity
         mCurrentPath.setText(getString(R.string.current_path, mLocation.getAbsolutePath()));
         mFilesAdapter.clear();
         File[] contents = mLocation.listFiles();
+        if (contents == null && RootCompat.isEnabled(this) && RootCompat.isActive(this)) {
+            // We cannot read this folder ourselves - ask the elevated backend (root/Shizuku).
+            // This does blocking IPC, so it must not run on the UI thread.
+            mCurrentPath.setText(getString(R.string.current_path, mLocation.getAbsolutePath())
+                    + " (" + getString(R.string.folder_picker_loading) + ")");
+            final File requested = folder;
+            final java.util.concurrent.ExecutorService executor =
+                    java.util.concurrent.Executors.newSingleThreadExecutor();
+            executor.execute(() -> {
+                final List<File> elevated = RootCompat.listDirectory(this, requested);
+                runOnUiThread(() -> {
+                    // Ignore stale results if the user navigated away meanwhile.
+                    if (mLocation != null && mLocation.equals(requested)) {
+                        showFolderContents(requested, elevated.toArray(new File[0]), true);
+                    }
+                });
+            });
+            executor.shutdown();
+            return;
+        }
         // In case we don't have read access to the folder, just display nothing.
         if (contents == null) {
             contents = new File[]{};
         }
+        showFolderContents(folder, contents, false);
+    }
 
-        Arrays.sort(contents, (f1, f2) -> {
-            if (f1.isDirectory() && f2.isFile())
-                return -1;
-            if (f1.isFile() && f2.isDirectory())
-                return 1;
-            return f1.getName().compareToIgnoreCase(f2.getName());
-        });
+    /**
+     * Fills the file list for {@code folder}.
+     */
+    private void showFolderContents(File folder, File[] contents, boolean elevatedListing) {
+        mCurrentPath.setText(getString(R.string.current_path, folder.getAbsolutePath()));
+        mFilesAdapter.clear();
+        if (elevatedListing && contents.length == 0) {
+            Toast.makeText(this, R.string.folder_picker_no_elevated_access, Toast.LENGTH_SHORT).show();
+        }
+
+        // In elevated mode we usually cannot stat the entries ourselves, so only the plain-fs
+        // listing can be sorted by "directories first"; the elevated listing is already sorted by
+        // RootCompat.listDirectory().
+        if (!elevatedListing) {
+            Arrays.sort(contents, (f1, f2) -> {
+                if (f1.isDirectory() && f2.isFile())
+                    return -1;
+                if (f1.isFile() && f2.isDirectory())
+                    return 1;
+                return f1.getName().compareToIgnoreCase(f2.getName());
+            });
+        }
 
         for (File f : contents) {
             mFilesAdapter.add(f);
@@ -268,12 +372,27 @@ public class FolderPickerActivity extends SyncthingActivity
 
     @Override
     public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
-        @SuppressWarnings("unchecked")
         ArrayAdapter<File> adapter = (ArrayAdapter<File>) mListView.getAdapter();
-        File f = adapter.getItem(i);
+        final File f = adapter.getItem(i);
         if (f.isDirectory()) {
             displayFolder(f);
             invalidateOptions();
+            return;
+        }
+        // In root/Shizuku mode we cannot stat the entry, so ask the elevated backend.
+        if (RootCompat.isEnabled(this) && RootCompat.isActive(this)) {
+            final java.util.concurrent.ExecutorService executor =
+                    java.util.concurrent.Executors.newSingleThreadExecutor();
+            executor.execute(() -> {
+                final boolean isDir = RootCompat.isDirectory(this, f);
+                runOnUiThread(() -> {
+                    if (isDir) {
+                        displayFolder(f);
+                        invalidateOptions();
+                    }
+                });
+            });
+            executor.shutdown();
         }
     }
 

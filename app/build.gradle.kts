@@ -34,6 +34,8 @@ dependencies {
     implementation(libs.navigation3.ui)
     implementation(libs.preference.ktx)
     implementation(libs.recyclerview)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     implementation(libs.stream)
     implementation(libs.volley)
     implementation(libs.zhanghai.compose.preference)
@@ -54,6 +56,7 @@ android {
     }
 
     buildFeatures {
+        aidl = true
         compose = true
     }
 

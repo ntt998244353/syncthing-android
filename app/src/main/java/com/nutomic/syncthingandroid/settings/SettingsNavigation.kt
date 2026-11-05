@@ -46,6 +46,8 @@ sealed interface SettingsRoute : NavKey {
     @Serializable
     data object Experimental : SettingsRoute
     @Serializable
+    data object RootCompat : SettingsRoute
+    @Serializable
     data object About : SettingsRoute
     @Serializable
     data object Licenses : SettingsRoute
@@ -64,6 +66,7 @@ sealed interface SettingsRoute : NavKey {
             "ImportExport" -> ImportExport
             "Troubleshooting" -> Troubleshooting
             "Experimental" -> Experimental
+            "RootCompat" -> RootCompat
             "About" -> About
             "Licenses" -> Licenses
             "Root" -> Root
@@ -119,6 +122,7 @@ fun SettingsNavDisplay(
             settingsImportExportEntry()
             settingsTroubleshootingEntry()
             settingsExperimentalEntry()
+            settingsRootCompatEntry()
             settingsAboutEntry()
             licensesEntry()
         },

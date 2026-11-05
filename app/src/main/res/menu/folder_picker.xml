@@ -21,4 +21,9 @@
         android:icon="@drawable/ic_add_folder_24dp_white"
         app:showAsAction="ifRoom" />
 
+    <item
+        android:id="@+id/go_to_path"
+        android:title="@string/folder_picker_go_to_path"
+        app:showAsAction="never" />
+
 </menu>

@@ -8,7 +8,9 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
-    <uses-sdk tools:overrideLibrary="com.google.zxing.client.android" />
+    <!-- rikka.shizuku declares minSdk 24; it is only used when a Shizuku/root backend is
+         active and every call is guarded (see RootCompat), so the app keeps supporting 23. -->
+    <uses-sdk tools:overrideLibrary="com.google.zxing.client.android,rikka.shizuku.api,rikka.shizuku.provider" />
 
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -296,9 +298,24 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+        <!--
+            Shizuku user service: runs as the Shizuku server user (shell/root) and therefore is
+            allowed to read/write folders which are not accessible to the app UID itself.
+            It is a binder interface, not an android.app.Service (bound by Shizuku via reflection),
+            hence the Instantiatable suppression.
+        -->
+        <service
+            android:name=".service.RootCompatService"
+            android:exported="true"
+            android:process=":rootcompat"
+            tools:ignore="ExportedService,Instantiatable" />
+
     </application>
 
+    <!-- queries is required to detect the Shizuku manager app (root/shell privilege broker) -->
     <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="moe.shizuku.redirect" />
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>

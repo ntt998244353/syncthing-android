@@ -70,6 +70,22 @@ public class Constants {
     public static final String PREF_SOCKS_PROXY_ADDRESS         = "socks_proxy_address";
     public static final String PREF_HTTP_PROXY_ADDRESS          = "http_proxy_address";
 
+    // Preferences - Root / Shizuku folder access (see {@link RootCompat})
+    public static final String PREF_ROOT_COMPAT_ENABLED         = "root_compat_enabled";
+    public static final String PREF_ROOT_COMPAT_MODE            = "root_compat_mode";
+    public static final String PREF_ROOT_COMPAT_SUPERUSER_CMD   = "root_compat_superuser_command";
+
+    public final class RootCompatMode {
+        /** Never elevate, use the app UID sandbox only. */
+        public static final String OFF                         = "off";
+        /** Auto: use Shizuku if available, otherwise fall back to "su" (root). */
+        public static final String AUTO                        = "auto";
+        public static final String SHIZUKU                     = "shizuku";
+        public static final String ROOT                        = "root";
+
+        private RootCompatMode() { }
+    }
+
     // Preferences - per Folder and Device Sync Conditions
     public static final String PREF_OBJECT_PREFIX_FOLDER        = "sc_folder_";
     public static final String PREF_OBJECT_PREFIX_DEVICE        = "sc_device_";
@@ -182,6 +198,17 @@ public class Constants {
      * File in the config folder that contains configuration.
      */
     public static final String CONFIG_FILE = "config.xml";
+
+    /**
+     * Sub directory inside the private app files dir which mirrors the elevated
+     * (root/Shizuku) process configuration. See {@link com.nutomic.syncthingandroid.util.RootCompat}.
+     */
+    public static final String ROOT_COMPAT_DIR = "root-compat";
+
+    /**
+     * Base name used for the fifo/daemon log inside {@link #ROOT_COMPAT_DIR}.
+     */
+    public static final String ROOT_COMPAT_LOG_FILE = "daemon.log";
 
     public static File getConfigFile(Context context) {
         return new File(context.getFilesDir(), CONFIG_FILE);

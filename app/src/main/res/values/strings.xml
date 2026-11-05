@@ -1154,4 +1154,31 @@
     <string name="cert_check_trust">Trusted by this device</string>
     <string name="cert_check_validity">Validity period</string>
     <string name="cert_check_key">Private key</string>
+    <!-- Root / Shizuku folder access -->
+    <string name="root_compat_title">Root/Shizuku folder access</string>
+    <string name="root_compat_summary">Run Syncthing with elevated privileges so folders like /storage/emulated/0/Android or /data/media can be synced.</string>
+    <string name="root_compat_enable_title">Enable root/Shizuku folder access</string>
+    <string name="root_compat_enable_summary">Restarts Syncthing as a privileged process (requires root or Shizuku).</string>
+    <string name="root_compat_mode_title">Backend</string>
+    <string name="root_compat_mode_auto">Automatic (Shizuku, then root)</string>
+    <string name="root_compat_mode_shizuku">Shizuku only</string>
+    <string name="root_compat_mode_root">Root (su) only</string>
+    <string name="root_compat_status_title">Status</string>
+    <string name="root_compat_status_unknown">Unknown</string>
+    <string name="root_compat_status_disabled">Disabled - Syncthing runs in the app sandbox</string>
+    <string name="root_compat_status_shizuku">Active via Shizuku (uid %1$d)</string>
+    <string name="root_compat_status_root">Active via root (uid 0)</string>
+    <string name="root_compat_status_shizuku_missing">Shizuku is not installed</string>
+    <string name="root_compat_status_shizuku_not_running">Shizuku is not running - start it first</string>
+    <string name="root_compat_status_shizuku_permission">Shizuku permission not granted - tap to grant</string>
+    <string name="root_compat_status_no_backend">No root and no Shizuku available</string>
+    <string name="root_compat_request_permission">Grant Shizuku permission</string>
+    <string name="root_compat_install_shizuku">Install Shizuku</string>
+    <string name="root_compat_restart_required">Restart Syncthing to apply the change</string>
+    <string name="root_compat_shared_home_title">Privileged home directory</string>
+    <string name="root_compat_shared_home_summary">%1$s (config and index are stored there while elevation is active)</string>
+    <string name="folder_picker_go_to_path">Go to path…</string>
+    <string name="folder_picker_invalid_path">This path does not exist or is not a directory</string>
+    <string name="folder_picker_no_elevated_access">No access to this folder, even with root/Shizuku</string>
+    <string name="folder_picker_loading">loading…</string>
 </resources>

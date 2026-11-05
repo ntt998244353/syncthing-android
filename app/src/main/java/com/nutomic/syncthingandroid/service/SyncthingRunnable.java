@@ -18,6 +18,8 @@ import com.google.common.io.Files;
 import com.nutomic.syncthingandroid.R;
 import com.nutomic.syncthingandroid.SyncthingApp;
 import com.nutomic.syncthingandroid.util.FileUtils;
+import com.nutomic.syncthingandroid.util.RootCompat;
+import com.nutomic.syncthingandroid.util.RootCompatHome;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.io.BufferedReader;
@@ -33,6 +35,7 @@ import java.security.InvalidParameterException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.inject.Inject;
@@ -59,6 +62,16 @@ public class SyncthingRunnable implements Runnable {
     private final File mSyncthingBinary;
     private String[] mCommand;
     private final File mSyncthingLogFile;
+
+    /**
+     * True if the daemon is run through the root/Shizuku backend, see {@link RootCompat}.
+     */
+    private boolean mUsingRootCompat = false;
+
+    /**
+     * Used by {@link #logElevatedOutput} to know when to stop following the daemon log.
+     */
+    private volatile boolean mElevatedDaemonActive = false;
 
     @Inject
     SharedPreferences mPreferences;
@@ -140,12 +153,34 @@ public class SyncthingRunnable implements Runnable {
              * Setup and run a new syncthing instance
              */
             HashMap<String, String> targetEnv = buildEnvironment();
-            process = setupAndLaunch(targetEnv);
-
-            mSyncthing.set(process);
 
             Thread lInfo = null;
             Thread lWarn = null;
+            FutureTask<Integer> elevatedDaemon = null;
+            if (mUsingRootCompat && !returnStdOut) {
+                // Run the daemon with elevated privileges (root or Shizuku). The config and keys
+                // are staged into a directory the elevated user can read first.
+                RootCompatHome.prepare(mContext);
+                RootCompatHome.stageAppFiles(mContext);
+                // Must live in the shared home: the elevated user cannot write to the app sandbox.
+                File elevatedLog = RootCompatHome.getElevatedLogFile(mContext);
+                elevatedDaemon = RootCompat.startDaemon(mContext, mCommand, targetEnv, elevatedLog);
+                if (elevatedDaemon != null) {
+                    mElevatedDaemonActive = true;
+                    lInfo = logElevatedOutput(elevatedLog);
+                } else {
+                    Log.w(TAG, "Failed to start the elevated daemon, falling back to the app sandbox");
+                    mUsingRootCompat = false;
+                    // Restore the sandbox home for the fallback start.
+                    targetEnv.put("STHOMEDIR", mContext.getFilesDir().toString());
+                    process = setupAndLaunch(targetEnv);
+                    mSyncthing.set(process);
+                }
+            } else {
+                process = setupAndLaunch(targetEnv);
+                mSyncthing.set(process);
+            }
+
             if (returnStdOut) {
                 BufferedReader br = null;
                 try {
@@ -161,13 +196,21 @@ public class SyncthingRunnable implements Runnable {
                     if (br != null)
                         br.close();
                 }
-            } else {
+            } else if (process != null) {
                 lInfo = log(process.getInputStream(), Log.INFO);
                 lWarn = log(process.getErrorStream(), Log.WARN);
             }
 
-            exitCode = process.waitFor();
-            LogV("Syncthing exited with code " + exitCode);
+            if (elevatedDaemon != null) {
+                exitCode = elevatedDaemon.get();
+                mElevatedDaemonActive = false;
+                LogV("Elevated Syncthing exited with code " + exitCode);
+                // Changes made through the Web GUI are only present in the elevated home.
+                RootCompatHome.syncBackConfig(mContext);
+            } else {
+                exitCode = process.waitFor();
+                LogV("Syncthing exited with code " + exitCode);
+            }
             mSyncthing.set(null);
             if (lInfo != null) {
                 lInfo.join();
@@ -213,9 +256,10 @@ public class SyncthingRunnable implements Runnable {
                     mNotificationHandler.showCrashedNotification(R.string.notification_crash_title, Integer.toString(exitCode));
                     sendStopToService = true;
             }
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException | InterruptedException | java.util.concurrent.ExecutionException e) {
             Log.e(TAG, "Failed to execute syncthing binary or read output", e);
         } finally {
+            mElevatedDaemonActive = false;
             if (multicastLock != null) {
                 multicastLock.release();
                 multicastLock = null;
@@ -376,6 +420,59 @@ public class SyncthingRunnable implements Runnable {
         }
     }
 
+    /**
+     * Follows the log file written by the elevated daemon and forwards it to logcat and the
+     * regular {@link #mSyncthingLogFile}.
+     * <p>
+     * The elevated process cannot hand its pipes to the app, therefore the output is redirected
+     * into a file inside the app's private directory (which the app itself can read).
+     */
+    private Thread logElevatedOutput(final File elevatedLog) {
+        final long startOffset = elevatedLog.length();
+        Thread t = new Thread(() -> {
+            long offset = startOffset;
+            boolean running = true;
+            while (running) {
+                try {
+                    long length = elevatedLog.length();
+                    if (length > offset) {
+                        try (RandomAccessFile input = new RandomAccessFile(elevatedLog, "r")) {
+                            input.seek(offset);
+                            byte[] buf = new byte[4096];
+                            int n;
+                            while ((n = input.read(buf)) > 0) {
+                                offset += n;
+                                String chunk = new String(buf, 0, n, Charsets.UTF_8);
+                                for (String line : chunk.split("\n")) {
+                                    if (!line.isEmpty()) {
+                                        Files.append(line + "\n", mSyncthingLogFile, Charsets.UTF_8);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (length < offset) {
+                        // Log got truncated/rotated.
+                        offset = 0;
+                    }
+                } catch (IOException e) {
+                    Log.w(TAG, "logElevatedOutput: Failed to read " + elevatedLog, e);
+                }
+                running = mElevatedDaemonActive;
+                if (running) {
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }, "syncthing-elevated-log");
+        t.start();
+        return t;
+    }
+
     private HashMap<String, String> buildEnvironment() {
         HashMap<String, String> targetEnv = new HashMap<>();
 
@@ -383,7 +480,17 @@ public class SyncthingRunnable implements Runnable {
         targetEnv.put("HOME", FileUtils.getSyncthingTildeAbsolutePath());
 
         // Set config, key and database directory.
-        targetEnv.put("STHOMEDIR", mContext.getFilesDir().toString());
+        // When root/Shizuku mode is active the daemon runs as a different user and therefore needs
+        // a home directory it can access, see {@link RootCompatHome}.
+        mUsingRootCompat = RootCompat.isActive(mContext) && mCommand.length > 0
+                && mCommand.length > 1 && "serve".equals(mCommand[1]);
+        final File homeDir;
+        if (mUsingRootCompat) {
+            homeDir = RootCompatHome.getSharedHome(mContext);
+        } else {
+            homeDir = mContext.getFilesDir();
+        }
+        targetEnv.put("STHOMEDIR", homeDir.toString());
         targetEnv.put("STTRACE", TextUtils.join(" ",
                 mPreferences.getStringSet(Constants.PREF_DEBUG_FACILITIES_ENABLED, new HashSet<>())));
         targetEnv.put("STMONITORED", "1");

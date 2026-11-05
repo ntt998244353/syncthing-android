@@ -71,6 +71,13 @@ fun SettingsRootScreen() {
         }
         item {
             Preference(
+                title = { Text(stringResource(R.string.root_compat_title)) },
+                summary = { Text(stringResource(R.string.root_compat_summary)) },
+                onClick = { navigator.navigateTo(SettingsRoute.RootCompat) },
+            )
+        }
+        item {
+            Preference(
                 title = { Text(stringResource(R.string.category_experimental)) },
                 onClick = { navigator.navigateTo(SettingsRoute.Experimental) },
             )

@@ -9,6 +9,7 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.common.base.Charsets;
@@ -142,6 +143,27 @@ public class Util {
      * Look for running processes and end them gracefully.
      */
     public static void killProcess(final String processName) {
+        killProcess(null, processName);
+    }
+
+    /**
+     * Look for running processes and end them gracefully.
+     * <p>
+     * When root/Shizuku mode is active the Syncthing daemon runs as a different user, so the
+     * app's own {@code ps} output does not contain it. In that case the elevated backend is asked
+     * to terminate the daemon and the elevated process list is used for the wait loop.
+     *
+     * @param context may be null to use the sandbox-only implementation
+     */
+    public static void killProcess(@Nullable final Context context, final String processName) {
+        if (context != null && RootCompat.isActive(context)) {
+            // The daemon runs as a different user and is not visible in our own "ps" output.
+            RootCompat.stopDaemon(context);
+            SystemClock.sleep(200);
+            RootCompat.killProcess(context, processName);
+            return;
+        }
+
         int exitCode;
         List<String> processPIDs = getProcessPIDs(processName);
         if (processPIDs.isEmpty()) {

@@ -51,6 +51,7 @@ import com.nutomic.syncthingandroid.service.SyncthingService;
 import com.nutomic.syncthingandroid.service.SyncthingServiceBinder;
 import com.nutomic.syncthingandroid.util.ConfigRouter;
 import com.nutomic.syncthingandroid.util.FileUtils;
+import com.nutomic.syncthingandroid.util.RootCompat;
 import com.nutomic.syncthingandroid.util.FileUtils.ExternalStorageDirType;
 import com.nutomic.syncthingandroid.util.TextWatcherAdapter;
 import com.nutomic.syncthingandroid.util.Util;
@@ -757,6 +758,19 @@ public class FolderActivity extends SyncthingActivity {
          * Access level readwrite: folder can be configured "sendonly" or "sendreceive".
          */
         mCanWriteToPath = Util.nativeBinaryCanWriteToPath(FolderActivity.this, mFolder.path);
+        if (!mCanWriteToPath && RootCompat.isEnabled(this) && RootCompat.isActive(this)) {
+            /**
+             * The native binary runs with elevated privileges (root/Shizuku), so test the write
+             * access with the same backend instead of the app sandbox.
+             */
+            mCanWriteToPath = RootCompat.canWrite(this, mFolder.path);
+        }
+        if (mCanWriteToPath && RootCompat.isEnabled(this)
+                && !Util.nativeBinaryCanWriteToPath(FolderActivity.this, mFolder.path)) {
+            // Create the folder markers now, because the elevated user owns the elevated process
+            // and the app itself may not be able to create them later.
+            RootCompat.prepareFolder(this, mFolder.path);
+        }
         if (mCanWriteToPath) {
             mAccessExplanationView.setText(R.string.folder_path_readwrite);
             mFolderTypeView.setEnabled(true);
