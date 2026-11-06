@@ -6,6 +6,7 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -31,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 
 import rikka.shizuku.Shizuku;
 
@@ -260,7 +262,7 @@ public final class RootCompat {
      * UID of the elevated process or -1.
      */
     public static int getElevatedUid(Context context) {
-        IRootCompatService service = bindUserService(context);
+        IRootCompatService service = bindUserServiceOffMainThread(context);
         if (service == null) {
             return -1;
         }
@@ -324,7 +326,7 @@ public final class RootCompat {
 
     /**
      * Binds (once) to the Shizuku user service and returns it, or {@code null} if Shizuku is not
-     * usable. Blocking; must not be called on the main thread.
+     * usable. Blocking; must not be called on the main thread - see {@link #bindUserServiceOffMainThread}.
      */
     @Nullable
     public static IRootCompatService bindUserService(Context context) {
@@ -377,6 +379,37 @@ public final class RootCompat {
         }
     }
 
+    /**
+     * Same as {@link #bindUserService}, but safe to call from the main thread.
+     *
+     * <p>Shizuku delivers the user service binder with a broadcast whose {@code onReceive} runs on
+     * the main thread. Blocking the main thread while waiting for that binder therefore deadlocks
+     * the connection until the timeout expires. Offloading the wait to a worker thread keeps the
+     * main looper free to dispatch the broadcast.</p>
+     */
+    @Nullable
+    public static IRootCompatService bindUserServiceOffMainThread(Context context) {
+        IRootCompatService service = sUserService;
+        if (service != null && service.asBinder().pingBinder()) {
+            return service;
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return bindUserService(context);
+        }
+        final Context appContext = context.getApplicationContext();
+        FutureTask<IRootCompatService> task =
+                new FutureTask<>(() -> bindUserService(appContext));
+        Thread thread = new Thread(task, "rootcompat-bind");
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            return task.get(BIND_TIMEOUT_MS + 5_000, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            Log.w(TAG, "bindUserServiceOffMainThread: " + e);
+            return null;
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     // Remote process helpers
     // ---------------------------------------------------------------------------------------
@@ -421,7 +454,7 @@ public final class RootCompat {
             return null;
         }
         if (Constants.RootCompatMode.SHIZUKU.equals(backend)) {
-            IRootCompatService service = bindUserService(context);
+            IRootCompatService service = bindUserServiceOffMainThread(context);
             if (service == null) {
                 Log.w(TAG, "startProcess: Shizuku user service not available");
                 return null;
@@ -466,7 +499,7 @@ public final class RootCompat {
 
         FutureTask<Integer> task = new FutureTask<>(() -> {
             if (Constants.RootCompatMode.SHIZUKU.equals(backend)) {
-                IRootCompatService service = bindUserService(context);
+                IRootCompatService service = bindUserServiceOffMainThread(context);
                 if (service == null) {
                     Log.w(TAG, "startDaemon: Shizuku user service not available");
                     return -1;
@@ -500,7 +533,7 @@ public final class RootCompat {
             // fall back to killing it by its process name (see Util#killProcess).
             return;
         }
-        IRootCompatService service = bindUserService(context);
+        IRootCompatService service = bindUserServiceOffMainThread(context);
         if (service == null) {
             return;
         }
@@ -539,7 +572,7 @@ public final class RootCompat {
         }
         String resolved = resolveBackend(context);
         if (Constants.RootCompatMode.SHIZUKU.equals(resolved)) {
-            IRootCompatService service = bindUserService(context);
+            IRootCompatService service = bindUserServiceOffMainThread(context);
             if (service == null) {
                 return "";
             }
@@ -700,7 +733,7 @@ public final class RootCompat {
             return Collections.emptyList();
         }
         IRootCompatService service = Constants.RootCompatMode.SHIZUKU.equals(resolveBackend(context))
-                ? bindUserService(context)
+                ? bindUserServiceOffMainThread(context)
                 : null;
         String[] names;
         try {
@@ -768,7 +801,7 @@ public final class RootCompat {
         String resolved = resolveBackend(context);
         try {
             if (Constants.RootCompatMode.SHIZUKU.equals(resolved)) {
-                IRootCompatService service = bindUserService(context);
+                IRootCompatService service = bindUserServiceOffMainThread(context);
                 return service != null && service.isDirectory(path.getAbsolutePath());
             }
             return execShell(context, "test -d " + shellQuote(path.getAbsolutePath())) == 0;
@@ -789,7 +822,7 @@ public final class RootCompat {
         String resolved = resolveBackend(context);
         if (Constants.RootCompatMode.SHIZUKU.equals(resolved)) {
             try {
-                IRootCompatService service = bindUserService(context);
+                IRootCompatService service = bindUserServiceOffMainThread(context);
                 if (service != null && service.canWrite(absoluteFolderPath)) {
                     return true;
                 }
@@ -854,7 +887,7 @@ public final class RootCompat {
         String resolved = resolveBackend(context);
         if (Constants.RootCompatMode.SHIZUKU.equals(resolved)) {
             try {
-                IRootCompatService service = bindUserService(context);
+                IRootCompatService service = bindUserServiceOffMainThread(context);
                 if (service != null) {
                     return service.writeFile(target.getAbsolutePath(), content);
                 }
@@ -993,7 +1026,7 @@ public final class RootCompat {
     }
 
     private static String readFileInternal(Context context, File file) {
-        IRootCompatService service = bindUserService(context);
+        IRootCompatService service = bindUserServiceOffMainThread(context);
         if (service == null) {
             return "";
         }
