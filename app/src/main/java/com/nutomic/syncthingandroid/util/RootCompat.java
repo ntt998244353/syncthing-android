@@ -807,30 +807,42 @@ public final class RootCompat {
      * executable. Used to make the Syncthing binary reachable for the elevated user.
      */
     private static boolean copyExecutable(Context context, File source, File destination) {
-        byte[] content;
-        try (FileInputStream in = new FileInputStream(source);
-             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
-            byte[] buf = new byte[64 * 1024];
+        /*
+         * The Syncthing library is ~90 MB, and encoding it in one call needs more heap than the app
+         * has (the base64 string alone is a third larger again). Stream it in chunks instead.
+         */
+        String dir = destination.getParent();
+        String dst = destination.getAbsolutePath();
+        String prepare = "mkdir -p " + shellQuote(dir)
+                + " ; chmod 777 " + shellQuote(dir)
+                + " ; rm -f " + shellQuote(dst);
+        if (execShell(context, prepare) != 0) {
+            Log.e(TAG, "copyExecutable: Failed to prepare " + dir);
+            return false;
+        }
+        final int chunkSize = 512 * 1024;
+        byte[] buffer = new byte[chunkSize];
+        try (FileInputStream in = new FileInputStream(source)) {
             int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
+            boolean first = true;
+            while ((n = in.read(buffer)) > 0) {
+                byte[] chunk = new byte[n];
+                System.arraycopy(buffer, 0, chunk, 0, n);
+                String encoded = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP);
+                String cmd = "printf %s " + shellQuote(encoded)
+                        + " | base64 -d " + (first ? ">" : ">>") + " " + shellQuote(dst);
+                if (execShell(context, cmd) != 0) {
+                    Log.e(TAG, "copyExecutable: Failed to write a chunk of " + destination);
+                    return false;
+                }
+                first = false;
             }
-            content = out.toByteArray();
         } catch (IOException e) {
             Log.e(TAG, "copyExecutable: Failed to read " + source, e);
             return false;
         }
-        String encoded = android.util.Base64.encodeToString(content, android.util.Base64.NO_WRAP);
-        String dir = destination.getParent();
-        String dst = destination.getAbsolutePath();
-        String cmd = "mkdir -p " + shellQuote(dir)
-                + " ; chmod 777 " + shellQuote(dir)
-                + " ; rm -f " + shellQuote(dst)
-                + " ; printf %s " + shellQuote(encoded)
-                + " | base64 -d > " + shellQuote(dst)
-                + " ; chmod 755 " + shellQuote(dst)
-                + " ; test -x " + shellQuote(dst);
-        return execShell(context, cmd) == 0;
+        return execShell(context, "chmod 755 " + shellQuote(dst)
+                + " ; test -x " + shellQuote(dst)) == 0;
     }
 
     // ---------------------------------------------------------------------------------------
