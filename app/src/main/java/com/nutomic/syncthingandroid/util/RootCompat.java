@@ -721,6 +721,13 @@ public final class RootCompat {
          * elevated user (uid 0 / 2000) cannot traverse into it. /data/local/tmp on the other hand
          * is not writable by the app, so the bytes are streamed through the elevated backend.
          */
+        /*
+         * Most builds keep the library in an app library dir that the elevated user can execute
+         * directly (it is world readable). Only stage a copy when that is not the case.
+         */
+        if (execShell(context, "test -x " + shellQuote(binary.getAbsolutePath())) == 0) {
+            return command;
+        }
         File parent = RootCompatHome.getSharedHome(context).getParentFile();
         File execCopy = new File(parent, binary.getName());
         if (!execCopy.exists() || execCopy.length() != binary.length()) {
