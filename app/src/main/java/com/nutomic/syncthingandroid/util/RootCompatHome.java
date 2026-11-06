@@ -72,6 +72,19 @@ public final class RootCompatHome {
         if (!RootCompat.isActive(context)) {
             return false;
         }
+        if (!RootCompat.isShizukuReady(context)) {
+            /*
+             * The Shizuku user service binder arrives through a main thread broadcast, so it can
+             * land a moment after SyncthingService asks for the daemon. prepare() runs on a worker
+             * thread, so waiting here is safe and avoids falling back to the unprivileged sandbox
+             * just because we were a few hundred milliseconds early.
+             */
+            RootCompat.awaitShizuku(context);
+            if (!RootCompat.isShizukuReady(context)) {
+                Log.w(TAG, "prepare: Shizuku backend is not connected, cannot stage the home");
+                return false;
+            }
+        }
         String home = getSharedHome(context).getAbsolutePath();
         File log = getElevatedLogFile(context);
         String cmd = "mkdir -p " + RootCompat.shellQuote(home) + " ; "

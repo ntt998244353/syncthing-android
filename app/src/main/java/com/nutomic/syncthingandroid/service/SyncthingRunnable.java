@@ -160,11 +160,15 @@ public class SyncthingRunnable implements Runnable {
             if (mUsingRootCompat && !returnStdOut) {
                 // Run the daemon with elevated privileges (root or Shizuku). The config and keys
                 // are staged into a directory the elevated user can read first.
-                RootCompatHome.prepare(mContext);
-                RootCompatHome.stageAppFiles(mContext);
-                // Must live in the shared home: the elevated user cannot write to the app sandbox.
-                File elevatedLog = RootCompatHome.getElevatedLogFile(mContext);
-                elevatedDaemon = RootCompat.startDaemon(mContext, mCommand, targetEnv, elevatedLog);
+                File elevatedLog = null;
+                if (RootCompatHome.prepare(mContext)) {
+                    RootCompatHome.stageAppFiles(mContext);
+                    // Must live in the shared home: the elevated user cannot write to the app sandbox.
+                    elevatedLog = RootCompatHome.getElevatedLogFile(mContext);
+                    elevatedDaemon = RootCompat.startDaemon(mContext, mCommand, targetEnv, elevatedLog);
+                } else {
+                    Log.w(TAG, "The elevated backend is not usable, skipping the elevated start");
+                }
                 if (elevatedDaemon != null) {
                     mElevatedDaemonActive = true;
                     lInfo = logElevatedOutput(elevatedLog);

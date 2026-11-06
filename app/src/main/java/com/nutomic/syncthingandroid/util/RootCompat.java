@@ -109,6 +109,34 @@ public final class RootCompat {
     /**
      * Whether the Shizuku binder is reachable, i.e. the Shizuku server is running.
      */
+    /**
+     * True if the Shizuku backend is selected and its user service is connected and alive.
+     * Non-blocking, safe on the main thread.
+     */
+    public static boolean isShizukuReady(Context context) {
+        if (!Constants.RootCompatMode.SHIZUKU.equals(resolveBackend(context))) {
+            // The root backend needs no binder, so it is always considered ready here.
+            return Constants.RootCompatMode.ROOT.equals(resolveBackend(context));
+        }
+        IRootCompatService service = sUserService;
+        return service != null && service.asBinder().pingBinder();
+    }
+
+    /**
+     * Blocks until the Shizuku user service is connected. Only call this from a worker thread.
+     *
+     * @return true if the service is usable afterwards
+     */
+    public static boolean awaitShizuku(Context context) {
+        if (!Constants.RootCompatMode.SHIZUKU.equals(resolveBackend(context))) {
+            return true;
+        }
+        return bindUserServiceOffMainThread(context) != null;
+    }
+
+    /**
+     * True if Shizuku is installed, running and this app may use it.
+     */
     public static boolean isShizukuAvailable(Context context) {
         if (!isShizukuInstalled(context)) {
             return false;
