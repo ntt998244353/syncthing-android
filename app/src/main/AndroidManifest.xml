@@ -310,6 +310,19 @@
             android:process=":rootcompat"
             tools:ignore="ExportedService,Instantiatable" />
 
+        <!--
+            Mandatory for the Shizuku binder handshake: the manager sends the binder to this
+            ContentProvider (see ShizukuProvider.ACTION_BINDER_RECEIVED). Without it
+            Shizuku.pingBinder() always returns false and no permission dialog can be shown.
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="moe.shizuku.manager.permission.API_V23" />
+
     </application>
 
     <!-- queries is required to detect the Shizuku manager app (root/shell privilege broker) -->
