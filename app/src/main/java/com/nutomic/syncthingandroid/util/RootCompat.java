@@ -290,8 +290,9 @@ public final class RootCompat {
         @Override
         public void onServiceConnected(ComponentName name, IBinder binder) {
             Log.i(TAG, "Shizuku user service connected");
-            sUserService = IRootCompatService.Stub.asInterface(binder);
             synchronized (USER_SERVICE_LOCK) {
+                sUserService = IRootCompatService.Stub.asInterface(binder);
+                sUserServiceRequested = false;
                 USER_SERVICE_LOCK.notifyAll();
             }
         }
@@ -299,11 +300,21 @@ public final class RootCompat {
         @Override
         public void onServiceDisconnected(ComponentName name) {
             Log.w(TAG, "Shizuku user service disconnected");
-            sUserService = null;
+            synchronized (USER_SERVICE_LOCK) {
+                sUserService = null;
+                sUserServiceRequested = false;
+                USER_SERVICE_LOCK.notifyAll();
+            }
         }
     };
 
     private static final Object USER_SERVICE_LOCK = new Object();
+
+    /**
+     * True while a {@link Shizuku#bindUserService} call is in flight, so that concurrent callers
+     * do not stack up bind requests. Guarded by {@link #USER_SERVICE_LOCK}.
+     */
+    private static boolean sUserServiceRequested;
 
     /**
      * Binds (once) to the Shizuku user service and returns it, or {@code null} if Shizuku is not
@@ -319,18 +330,44 @@ public final class RootCompat {
             return service;
         }
         synchronized (USER_SERVICE_LOCK) {
+            // Another thread may have completed the bind while we waited for the lock.
             service = sUserService;
-            if (service != null) {
+            if (service != null && service.asBinder().pingBinder()) {
                 return service;
             }
-            try {
-                Shizuku.bindUserService(getUserServiceArgs(context), USER_SERVICE_CONNECTION);
-                USER_SERVICE_LOCK.wait(BIND_TIMEOUT_MS);
-            } catch (Throwable t) {
-                Log.w(TAG, "bindUserService: Failed to bind Shizuku user service", t);
-                return null;
+            if (!sUserServiceRequested) {
+                sUserServiceRequested = true;
+                try {
+                    Shizuku.bindUserService(getUserServiceArgs(context), USER_SERVICE_CONNECTION);
+                } catch (Throwable t) {
+                    sUserServiceRequested = false;
+                    Log.w(TAG, "bindUserService: Failed to bind Shizuku user service", t);
+                    return null;
+                }
             }
-            return sUserService;
+            /*
+             * Loop instead of a single wait(): the connection callback may already have fired
+             * before we got the lock (the notify would have been lost) and a stale binder may
+             * need another round trip. Polling keeps this robust without depending on timing.
+             */
+            long deadline = System.currentTimeMillis() + BIND_TIMEOUT_MS;
+            while (true) {
+                service = sUserService;
+                if (service != null && service.asBinder().pingBinder()) {
+                    return service;
+                }
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    Log.w(TAG, "bindUserService: Timed out waiting for the Shizuku user service");
+                    return null;
+                }
+                try {
+                    USER_SERVICE_LOCK.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
         }
     }
 
