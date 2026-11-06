@@ -128,10 +128,32 @@ public final class RootCompat {
      * @return true if the service is usable afterwards
      */
     public static boolean awaitShizuku(Context context) {
-        if (!Constants.RootCompatMode.SHIZUKU.equals(resolveBackend(context))) {
+        if (!isShizukuInstalled(context)) {
+            return false;
+        }
+        if (Constants.RootCompatMode.ROOT.equals(resolveBackend(context))) {
             return true;
         }
-        return bindUserServiceOffMainThread(context) != null;
+        /*
+         * Right after process start the Shizuku binder may already be alive while this process is
+         * not attached as a client yet. Poll until that settles instead of failing straight away.
+         */
+        long deadline = System.currentTimeMillis() + BIND_TIMEOUT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            if (isShizukuAvailable(context)) {
+                IRootCompatService service = bindUserServiceOffMainThread(context);
+                Log.i(TAG, "awaitShizuku: service=" + (service != null));
+                return service != null;
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        Log.w(TAG, "awaitShizuku: timed out waiting for Shizuku");
+        return false;
     }
 
     /**
@@ -149,9 +171,28 @@ public final class RootCompat {
             if (Shizuku.isPreV11()) {
                 return true;
             }
+            if (!isShizukuClientAttached()) {
+                return false;
+            }
             return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
         } catch (Throwable t) {
             Log.w(TAG, "isShizukuAvailable: Shizuku not usable", t);
+            return false;
+        }
+    }
+
+    /**
+     * Shizuku can hold a live binder while the app process is not attached as a client yet. In that
+     * window every API call (including {@link Shizuku#checkSelfPermission()}) throws
+     * {@code IllegalStateException: Not an attached client}. Probing like this avoids that.
+     */
+    private static boolean isShizukuClientAttached() {
+        try {
+            Shizuku.getVersion();
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
+        } catch (Throwable t) {
             return false;
         }
     }
@@ -165,6 +206,7 @@ public final class RootCompat {
         }
         try {
             return Shizuku.pingBinder()
+                    && isShizukuClientAttached()
                     && !Shizuku.isPreV11()
                     && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED;
         } catch (Throwable t) {

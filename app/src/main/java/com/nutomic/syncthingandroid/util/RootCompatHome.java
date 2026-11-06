@@ -72,7 +72,11 @@ public final class RootCompatHome {
         if (!RootCompat.isActive(context)) {
             return false;
         }
-        if (!RootCompat.isShizukuReady(context)) {
+        boolean ready = RootCompat.isShizukuReady(context);
+        Log.i(TAG, "prepare: backend=" + RootCompat.resolveBackend(context)
+                + " shizukuReady=" + ready
+                + " onMainThread=" + (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()));
+        if (!ready) {
             /*
              * The Shizuku user service binder arrives through a main thread broadcast, so it can
              * land a moment after SyncthingService asks for the daemon. prepare() runs on a worker
