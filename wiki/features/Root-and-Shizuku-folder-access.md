@@ -94,3 +94,62 @@ Verifying the handshake with `adb logcat | grep ShizukuProvider` should print `b
 shortly after the app starts. If it prints `Permission Denial: opening provider
 rikka.shizuku.ShizukuProvider … requires moe.shizuku.manager.permission.API_V23`, the provider is
 still using the wrong permission attribute.
+
+## Runtime pitfalls
+
+Getting the daemon to actually run elevated took more than the handshake above. The failures below
+all looked like "the elevated backend is not available" but had distinct causes.
+
+### An unattached client is not a missing backend
+
+`Shizuku.pingBinder()` can already return `true` while the app process is still not attached as a
+client. Every API call in that window - including `Shizuku.checkSelfPermission()` - throws
+`IllegalStateException: Not an attached client`. Treating that as "Shizuku is unusable" made the
+startup probe fail even though the connection landed a moment later. `RootCompat.isShizukuClientAttached()`
+probes the attach state first, reports "not ready yet", and `awaitShizuku()` polls until it settles.
+
+### Never block the main thread on the user service binder
+
+The user service binder is delivered through a main thread broadcast. Waiting for it on the main
+thread deadlocks: the broadcast cannot be dispatched while the main thread sits in
+`wait()`/`Future.get()`. All binding goes through `bindUserServiceOffMainThread()`, `prepare()` runs
+on a worker thread, and `SyncthingApp` warms the connection up in the background.
+
+### `exec()` must not go through `startProcess()` on Shizuku
+
+A `ShizukuRemoteProcess` only has usable streams inside the service process, so `startProcess()`
+returns `null` and every command looked like it failed with `-1`, even though it had run. `exec()`
+calls the service directly and returns the real exit code.
+
+### The binary must be reachable by the elevated user
+
+`/data/user/0/<pkg>` is `0700`, so uid 0 / 2000 cannot traverse into it and `startDaemon` failed
+with `error=13, Permission denied`. `ensureBinaryExecutable()` first checks whether the elevated user
+can execute the library in place (`/data/app/.../lib/<abi>` usually is world readable); if not, it
+streams a copy into the staging directory and `chmod 755` it.
+
+Stream that copy in chunks. Encoding the ~90 MB library into a single base64 string needs a 93 MB
+allocation and blows the app heap with `OutOfMemoryError`, which surfaced only as a confusing
+`ExecutableNotFoundException` from the fallback path.
+
+### Staged files have to stay writable for the app
+
+Files written by the elevated shell are owned by uid 2000. `chmod 600` therefore locked the app out
+of `config.xml` and the keys. `RootCompatHome.copyFile()` uses `rm -f` before writing and
+`chmod 666` afterwards.
+
+## Verifying on a device
+
+1. Enable the feature in *Settings → Root/Shizuku folder access* and grant Shizuku access. The
+   status line must read `Active via Shizuku (uid 2000)`.
+2. Restart Syncthing (main menu → *Restart*).
+3. `adb shell ps -A | grep libsyncthingnative` must show `shell` (or `root`) as the user, not
+   `u0_aNNN`.
+4. `adb shell ls -la /data/local/tmp/syncthing-rootcompat/<versionCode>/home` shows `config.xml`,
+   `cert.pem`, `key.pem`, `https-cert.pem`, `https-key.pem` and a growing `daemon.log`.
+5. `adb shell cat /data/local/tmp/syncthing-rootcompat/<versionCode>/home/daemon.log` shows the
+   Syncthing banner and `GUI and API listening`.
+
+The Shizuku `shell` user holds `ext_data_rw` / `ext_obb_rw`, which is what makes
+`/storage/emulated/0/Android/data` and `/Android/obb` accessible. Those same paths still need root
+for `/data/media` and other apps' private data.
