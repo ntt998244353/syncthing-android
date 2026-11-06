@@ -716,21 +716,21 @@ public final class RootCompat {
         if (!binary.getAbsolutePath().startsWith(appLibDir.concat("/"))) {
             return command;
         }
-        File execCopy = new File(getWorkDir(context), binary.getName());
+        /*
+         * The copy must live outside the app private data dir: /data/user/0/<pkg> is 0700, so the
+         * elevated user (uid 0 / 2000) cannot traverse into it. /data/local/tmp on the other hand
+         * is not writable by the app, so the bytes are streamed through the elevated backend.
+         */
+        File parent = RootCompatHome.getSharedHome(context).getParentFile();
+        File execCopy = new File(parent, binary.getName());
         if (!execCopy.exists() || execCopy.length() != binary.length()) {
-            try (FileInputStream in = new FileInputStream(binary);
-                 FileOutputStream out = new FileOutputStream(execCopy)) {
-                byte[] buf = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "Failed to copy native binary to " + execCopy, e);
+            if (!copyExecutable(context, binary, execCopy)) {
+                Log.e(TAG, "Failed to stage the native binary at " + execCopy);
                 return command;
             }
         }
-        execShell(context, "chmod 755 '" + execCopy.getAbsolutePath() + "'");
+        execShell(context, "chmod 777 " + shellQuote(parent.getAbsolutePath()) + " ; "
+                + "chmod 755 " + shellQuote(execCopy.getAbsolutePath()));
         String[] result = command.clone();
         result[0] = execCopy.getAbsolutePath();
         return result;
@@ -800,6 +800,37 @@ public final class RootCompat {
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         return dir;
+    }
+
+    /**
+     * Streams {@code source} into {@code destination} through the elevated backend and marks it
+     * executable. Used to make the Syncthing binary reachable for the elevated user.
+     */
+    private static boolean copyExecutable(Context context, File source, File destination) {
+        byte[] content;
+        try (FileInputStream in = new FileInputStream(source);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            content = out.toByteArray();
+        } catch (IOException e) {
+            Log.e(TAG, "copyExecutable: Failed to read " + source, e);
+            return false;
+        }
+        String encoded = android.util.Base64.encodeToString(content, android.util.Base64.NO_WRAP);
+        String dir = destination.getParent();
+        String dst = destination.getAbsolutePath();
+        String cmd = "mkdir -p " + shellQuote(dir)
+                + " ; chmod 777 " + shellQuote(dir)
+                + " ; rm -f " + shellQuote(dst)
+                + " ; printf %s " + shellQuote(encoded)
+                + " | base64 -d > " + shellQuote(dst)
+                + " ; chmod 755 " + shellQuote(dst)
+                + " ; test -x " + shellQuote(dst);
+        return execShell(context, cmd) == 0;
     }
 
     // ---------------------------------------------------------------------------------------
