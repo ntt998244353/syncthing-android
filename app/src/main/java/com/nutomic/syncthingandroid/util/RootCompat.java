@@ -383,9 +383,10 @@ public final class RootCompat {
      * Same as {@link #bindUserService}, but safe to call from the main thread.
      *
      * <p>Shizuku delivers the user service binder with a broadcast whose {@code onReceive} runs on
-     * the main thread. Blocking the main thread while waiting for that binder therefore deadlocks
-     * the connection until the timeout expires. Offloading the wait to a worker thread keeps the
-     * main looper free to dispatch the broadcast.</p>
+     * the main thread. Waiting for that binder on the main thread therefore deadlocks: the
+     * broadcast can only be dispatched once the main looper is idle again. Off the main thread we
+     * block normally, but on the main thread we start the bind and return the cached service (or
+     * {@code null}) immediately, so the looper stays free and the connection can complete.</p>
      */
     @Nullable
     public static IRootCompatService bindUserServiceOffMainThread(Context context) {
@@ -396,18 +397,22 @@ public final class RootCompat {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             return bindUserService(context);
         }
-        final Context appContext = context.getApplicationContext();
-        FutureTask<IRootCompatService> task =
-                new FutureTask<>(() -> bindUserService(appContext));
-        Thread thread = new Thread(task, "rootcompat-bind");
-        thread.setDaemon(true);
-        thread.start();
-        try {
-            return task.get(BIND_TIMEOUT_MS + 5_000, TimeUnit.MILLISECONDS);
-        } catch (Exception e) {
-            Log.w(TAG, "bindUserServiceOffMainThread: " + e);
-            return null;
+        // Main thread: kick off the (idempotent) bind without waiting for the broadcast.
+        synchronized (USER_SERVICE_LOCK) {
+            if (!sUserServiceRequested) {
+                sUserServiceRequested = true;
+                try {
+                    Shizuku.bindUserService(getUserServiceArgs(context.getApplicationContext()),
+                            USER_SERVICE_CONNECTION);
+                } catch (Throwable t) {
+                    sUserServiceRequested = false;
+                    Log.w(TAG, "bindUserServiceOffMainThread: Failed to bind", t);
+                    return null;
+                }
+            }
         }
+        service = sUserService;
+        return (service != null && service.asBinder().pingBinder()) ? service : null;
     }
 
     // ---------------------------------------------------------------------------------------

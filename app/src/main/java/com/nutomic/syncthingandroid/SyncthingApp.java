@@ -34,6 +34,20 @@ public class SyncthingApp extends Application {
             } catch (Throwable t) {
                 Log.w("SyncthingApp", "Failed to request the Shizuku binder", t);
             }
+
+            /*
+             * Warm up the Shizuku user service connection in the background. The binder arrives
+             * through a main-thread broadcast, so this must not run on the main thread; doing it
+             * early means the connection is usually ready by the time SyncthingService wants to
+             * start the elevated daemon.
+             */
+            try {
+                final android.content.Context appContext = getApplicationContext();
+                new Thread(() -> com.nutomic.syncthingandroid.util.RootCompat
+                        .bindUserServiceOffMainThread(appContext), "rootcompat-warmup").start();
+            } catch (Throwable t) {
+                Log.w("SyncthingApp", "Failed to warm up the Shizuku user service", t);
+            }
         }
 
         // Set VM policy to avoid crash when sending folder URI to file manager.
