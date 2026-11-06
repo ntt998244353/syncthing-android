@@ -61,3 +61,36 @@ pre-creates the `.stfolder` marker as the elevated user so Syncthing finds a wri
 - If the backend disappears (Shizuku stopped, root revoked) the daemon stops and the app falls back
   to the normal sandbox on the next start, which also means sync folders outside the sandbox become
   unreachable until elevated access is restored.
+
+## Shizuku integration notes
+
+The Shizuku binder handshake trips up a lot of integrations, so the two mandatory pieces are
+documented here.
+
+1. **Provider declaration.** `rikka.shizuku.ShizukuProvider` has to be declared in the manifest. It
+   is a `ContentProvider`, not a `Service` or a `BroadcastReceiver`; the Shizuku server pushes its
+   binder into it through `ContentResolver.call()`. The `android:permission` attribute must be
+   `android.permission.INTERACT_ACROSS_USERS_FULL`, matching the upstream demo project. Using
+   `moe.shizuku.manager.permission.API_V23` looks intuitive but breaks adb/shell mode: the Shizuku
+   server does not hold that signature permission, so the call fails with a `SecurityException` and
+   `Shizuku.pingBinder()` silently stays `false`.
+
+   ```xml
+   <provider
+       android:name="rikka.shizuku.ShizukuProvider"
+       android:authorities="${applicationId}.shizuku"
+       android:enabled="true"
+       android:exported="true"
+       android:multiprocess="false"
+       android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+   ```
+
+2. **Binder request at process start.** `ShizukuProvider.attachInfo()` only validates its own
+   declaration, so `SyncthingApp.onCreate()` calls
+   `ShizukuProvider.requestBinderForNonProviderProcess(this)` to subscribe to
+   `moe.shizuku.api.action.BINDER_RECEIVED`. Without it the binder never reaches the app process.
+
+Verifying the handshake with `adb logcat | grep ShizukuProvider` should print `binder received`
+shortly after the app starts. If it prints `Permission Denial: opening provider
+rikka.shizuku.ShizukuProvider … requires moe.shizuku.manager.permission.API_V23`, the provider is
+still using the wrong permission attribute.
