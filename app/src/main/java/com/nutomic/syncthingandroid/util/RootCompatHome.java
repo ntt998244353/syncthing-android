@@ -178,9 +178,10 @@ public final class RootCompatHome {
             // Config and keys are small text files; base64 keeps the transport binary safe.
             String encoded = android.util.Base64.encodeToString(content, android.util.Base64.NO_WRAP);
             String cmd = "mkdir -p " + RootCompat.shellQuote(destination.getParent())
+                    + " && rm -f " + RootCompat.shellQuote(destination.getAbsolutePath())
                     + " && printf %s " + RootCompat.shellQuote(encoded)
                     + " | base64 -d > " + RootCompat.shellQuote(destination.getAbsolutePath())
-                    + " && chmod 600 " + RootCompat.shellQuote(destination.getAbsolutePath());
+                    + " && chmod 666 " + RootCompat.shellQuote(destination.getAbsolutePath());
             if (RootCompat.execShell(context, cmd) != 0) {
                 Log.w(TAG, "copyFile: Failed to copy " + source + " -> " + destination);
             }

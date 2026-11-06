@@ -57,7 +57,13 @@ public final class RootCompat {
     /**
      * Timeout for binding the Shizuku user service / waiting for the elevated daemon.
      */
-    private static final long BIND_TIMEOUT_MS = 10_000;
+    /**
+     * How long to wait for the Shizuku user service to connect. The Shizuku server itself allows
+     * 30s to start a user service process, and on a cold start (process fork + ART warm-up) the
+     * callback regularly takes well over 10s, so a shorter timeout makes the daemon fall back to
+     * the sandbox for no good reason.
+     */
+    private static final long BIND_TIMEOUT_MS = 45_000;
 
     private RootCompat() {
     }
