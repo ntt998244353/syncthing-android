@@ -162,6 +162,13 @@ public class SyncthingRunnable implements Runnable {
                 // are staged into a directory the elevated user can read first.
                 File elevatedLog = null;
                 if (RootCompatHome.prepare(mContext)) {
+                    /*
+                     * A daemon started before a crash or an app reinstall is not tracked by the
+                     * app anymore. It still holds the GUI port, so a fresh instance would exit
+                     * with "Another Syncthing instance may be already running".
+                     */
+                    RootCompat.killProcess(mContext, mCommand.length > 0
+                            ? new File(mCommand[0]).getName() : "libsyncthingnative.so");
                     RootCompatHome.stageAppFiles(mContext);
                     // Must live in the shared home: the elevated user cannot write to the app sandbox.
                     elevatedLog = RootCompatHome.getElevatedLogFile(mContext);
