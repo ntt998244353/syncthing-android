@@ -493,6 +493,25 @@ public final class RootCompat {
      * Runs a command in the elevated context and returns its exit code.
      */
     public static int exec(Context context, String[] command) {
+        String backend = resolveBackend(context);
+        if (Constants.RootCompatMode.SHIZUKU.equals(backend)) {
+            /*
+             * The Shizuku path cannot hand back a usable Process (its streams only live inside the
+             * service process), so startProcess() would return null and every command would look
+             * like a failure. Call the service directly to get the real exit code.
+             */
+            IRootCompatService service = bindUserServiceOffMainThread(context);
+            if (service == null) {
+                Log.w(TAG, "exec: Shizuku user service not available");
+                return -1;
+            }
+            try {
+                return service.exec(command, envToArray(null));
+            } catch (Throwable t) {
+                Log.w(TAG, "exec: Failed to run command via Shizuku", t);
+                return -1;
+            }
+        }
         Process p = startProcess(context, command, null);
         if (p == null) {
             return -1;
